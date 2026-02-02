@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zalo Data Transfer Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * {
+            transition: all 0.3s ease;
+        }
+
+        .step-container {
+            display: none;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        .step-container.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .toast {
+            animation: slideInUp 0.3s ease-in-out;
+        }
+
+        .step-dot {
+            @apply w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-white font-bold transition-all;
+        }
+
+        .step-dot.active {
+            @apply bg-gradient-to-r from-cyan-500 to-blue-600 shadow-lg;
+        }
+
+        .step-dot.completed {
+            @apply bg-green-600;
+        }
+
+        .step-line {
+            @apply flex-1 h-1 bg-gray-700 mx-2 mt-4;
+        }
+
+        .step-line.active {
+            @apply bg-gradient-to-r from-cyan-500 to-blue-600;
+        }
+
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .log-output::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-output::-webkit-scrollbar-track {
+            background: #111827;
+        }
+
+        .log-output::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+
+        .log-output::-webkit-scrollbar-thumb:hover {
+            background: #4B5563;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-gray-200 font-sans min-h-screen">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-5xl">
+        
+        <!-- Header -->
+        <header class="text-center mb-12 pt-8">
+            <div class="inline-block mb-4">
+                <span class="text-6xl md:text-7xl">📱💻</span>
+            </div>
+            <h1 class="text-4xl md:text-5xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent mb-3">Zalo Data Transfer Tool</h1>
+            <p class="text-gray-400 text-lg">Công cụ chuyển dữ liệu Zalo an toàn qua ADB</p>
+            <p class="text-gray-500 text-sm mt-2">Hỗ trợ Android (Termux) và Windows</p>
+        </header>
+
+        <!-- Step Indicator -->
+        <div class="mb-12 hidden md:flex flex justify-between">
+            <div class="step-dot active" id="step-indicator-1">1</div>
+            <div class="step-line" id="step-line-1"></div>
+            <div class="step-dot" id="step-indicator-2">2</div>
+            <div class="step-line" id="step-line-2"></div>
+            <div class="step-dot" id="step-indicator-3">3</div>
+            <div class="step-line" id="step-line-3"></div>
+            <div class="step-dot" id="step-indicator-4">4</div>
+        </div>
+
+        <!-- Main Wizard -->
+        <main id="wizard" class="bg-gradient-to-br from-gray-800 to-gray-900 p-4 md:p-8 rounded-2xl shadow-2xl border border-gray-700">
+            
+            <!-- Step 1: Chọn Môi Trường -->
+            <div id="step-1" class="step-container active">
+                <h2 class="text-3xl font-bold mb-2 text-white">Bước 1: Chọn Môi trường</h2>
+                <p class="text-gray-400 mb-8">Bạn đang chạy tool trên thiết bị nào?</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <button onclick="selectEnvironment('android')" class="bg-gradient-to-br from-gray-700 to-gray-800 hover:from-cyan-600 hover:to-blue-700 hover:text-white transition-all p-4 md:p-6 rounded-xl text-center shadow-lg hover:shadow-2xl transform hover:scale-105 cursor-pointer">
+                        <span class="text-5xl block mb-3">📱</span>
+                        <h3 class="text-2xl font-bold mb-2">Android (Termux)</h3>
+                        <p class="text-gray-300 text-sm">Chạy tool trên điện thoại Android qua Termux.</p>
+                    </button>
+                    <button onclick="selectEnvironment('windows')" class="bg-gradient-to-br from-gray-700 to-gray-800 hover:from-cyan-600 hover:to-blue-700 hover:text-white transition-all p-4 md:p-6 rounded-xl text-center shadow-lg hover:shadow-2xl transform hover:scale-105 cursor-pointer">
+                        <span class="text-5xl block mb-3">💻</span>
+                        <h3 class="text-2xl font-bold mb-2">Windows (PC)</h3>
+                        <p class="text-gray-300 text-sm">Chạy tool trên máy tính Windows.</p>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 2: Chọn Hướng Dữ Liệu -->
+            <div id="step-2" class="step-container">
+                <h2 class="text-3xl font-bold mb-2 text-white">Bước 2: Chọn Hướng Chuyển Dữ Liệu</h2>
+                <p class="text-gray-400 mb-8">Bạn muốn xuất hay nhập dữ liệu?</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <button onclick="selectDirection('export')" class="bg-gradient-to-br from-gray-700 to-gray-800 hover:from-cyan-600 hover:to-blue-700 hover:text-white transition-all p-4 md:p-6 rounded-xl text-center shadow-lg hover:shadow-2xl transform hover:scale-105 cursor-pointer">
+                        <span class="text-5xl block mb-3">📤</span>
+                        <h3 class="text-2xl font-bold mb-2">Xuất Dữ Liệu</h3>
+                        <p class="text-gray-300 text-sm mb-3">Lấy dữ liệu từ thiết bị này (A) sang thiết bị khác (B).</p>
+                        <div class="bg-gray-700 rounded-lg p-2 text-cyan-400 font-mono text-sm">A ➜ B</div>
+                    </button>
+                    <button onclick="selectDirection('import')" class="bg-gradient-to-br from-gray-700 to-gray-800 hover:from-cyan-600 hover:to-blue-700 hover:text-white transition-all p-4 md:p-6 rounded-xl text-center shadow-lg hover:shadow-2xl transform hover:scale-105 cursor-pointer">
+                        <span class="text-5xl block mb-3">📥</span>
+                        <h3 class="text-2xl font-bold mb-2">Nhập Dữ Liệu</h3>
+                        <p class="text-gray-300 text-sm mb-3">Lấy dữ liệu từ thiết bị khác (B) vào thiết bị này (A).</p>
+                        <div class="bg-gray-700 rounded-lg p-2 text-cyan-400 font-mono text-sm">B ➜ A</div>
+                    </button>
+                </div>
+                <button onclick="goToStep(1)" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-all duration-300 mt-8 w-full md:w-auto">← Quay lại</button>
+            </div>
+
+            <!-- Step 3: Cấu hình ADB -->
+            <div id="step-3" class="step-container">
+                <h2 class="text-3xl font-bold mb-2 text-white">Bước 3: Kết nối Thiết bị</h2>
+                <p class="text-gray-400 mb-8">Chọn phương thức kết nối với thiết bị đích.</p>
+                <div id="adb-connection-options"></div>
+                <button onclick="goToStep(2)" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-all duration-300 mt-8 w-full md:w-auto">← Quay lại</button>
+            </div>
+
+            <!-- Step 4: Thực thi -->
+            <div id="step-4" class="step-container">
+                <h2 class="text-3xl font-bold mb-2 text-white">Bước 4: Xác Nhận & Bắt Đầu</h2>
+                <p class="text-gray-400 mb-6">Kiểm tra lại thông tin trước khi bắt đầu.</p>
+                
+                <div id="transfer-summary" class="bg-gradient-to-br from-gray-700 to-gray-800 p-6 rounded-xl mb-8 border border-gray-600">
+                    <!-- Summary content here -->
+                </div>
+
+                <div class="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-4 mb-8">
+                    <p class="text-yellow-300 text-sm">
+                        <strong>⚠️ CẢNH BÁO:</strong> Thao tác này sẽ ghi đè dữ liệu Zalo trên thiết bị đích. Hãy chắc chắn bạn đã sao lưu dữ liệu quan trọng trước khi tiếp tục.
+                    </p>
+                </div>
+
+                <button id="start-transfer-btn" class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-bold py-2 px-4 text-sm md:py-3 md:px-6 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 w-full mb-6">🚀 Bắt đầu Chuyển Dữ Liệu</button>
+
+
+
+                <div id="progress-container" class="hidden">
+                    <div class="mb-4">
+                        <div class="flex justify-between mb-2">
+                            <span class="text-sm font-medium text-gray-300">Tiến trình:</span>
+                            <span class="text-sm font-medium text-cyan-400" id="progress-text">0%</span>
+                        </div>
+                        <div class="w-full bg-gray-600 rounded-full h-2 overflow-hidden">
+                            <div id="progress-bar" class="bg-gradient-to-r from-cyan-400 to-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="log-container" class="hidden">
+                    <div class="mb-4">
+                        <h3 class="text-sm font-medium text-gray-300 mb-2">Nhật ký thực thi:</h3>
+                        <pre id="log-output" class="w-full bg-gray-900 rounded-lg p-4 h-48 md:h-80 overflow-y-auto font-mono text-sm text-gray-300 border border-gray-700"></pre>
+                    </div>
+                </div>
+
+                <button onclick="goToStep(3)" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-all duration-300 w-full md:w-auto">← Quay lại</button>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="text-center mt-12 pb-8 text-gray-500 text-sm">
+            <p>Phát triển bởi Manus AI | Tối ưu cho Zalo v23.05.01</p>
+            <p class="mt-2 text-xs text-gray-600">Công cụ này hoạt động hoàn toàn cục bộ. Không gửi bất kỳ dữ liệu nào lên Internet.</p>
+        </footer>
+
+        <!-- Toast Notifications Container -->
+        <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm"></div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
