@@ -40,97 +40,80 @@ def run_adb_command(command, device_serial=None, is_windows=False):
 def start_transfer_thread(direction, transfer_state_from_frontend):
     """
     Hàm chính thực hiện việc chuyển dữ liệu trong một thread riêng.
+    Xử lý logic cho cả môi trường Windows (1 thiết bị) và Android (2 thiết bị).
     """
     global transfer_status
     
     environment = transfer_state_from_frontend.get("environment")
     is_windows = (environment == "windows")
+    connection_details = transfer_state_from_frontend.get("connection", {})
     
-    transfer_status["log"] = "Đang kiểm tra thiết bị...\n"
-    devices_result = run_adb_command("devices", is_windows=is_windows)
-    connected_device_id = None
-    if devices_result["success"]:
-        lines = devices_result["output"].strip().split("\n")[1:]
-        device_lines = [line.split()[0] for line in lines if "device" in line]
-        if device_lines:
-            connected_device_id = device_lines[0]
-
-    if not connected_device_id:
-        transfer_status["status"] = "failed"
-        transfer_status["log"] = "Lỗi: Không tìm thấy thiết bị nào được kết nối qua ADB. Vui lòng kiểm tra kết nối và bật USB/Wireless Debugging.\n"
-        return
-
     data_path_on_device = "/sdcard/Android/data/com.zing.zalo/files"
-    local_temp_dir = os.path.join(os.getcwd(), "zalo_data_temp") # Thư mục tạm thời trên máy chạy tool
+    # Thư mục tạm thời trên máy chạy tool (phải là nơi Termux có quyền ghi)
+    local_temp_dir = "/data/data/com.termux/files/home/zalo_data_temp"
     os.makedirs(local_temp_dir, exist_ok=True)
-    local_zalo_data_path = os.path.join(local_temp_dir, "files") # Đường dẫn đích cho dữ liệu Zalo trên máy chạy tool
+    # Đường dẫn này là nơi thư mục 'files' sẽ được kéo về, ví dụ: /data/data/com.termux/files/home/zalo_data_temp/files
+    local_zalo_data_path = os.path.join(local_temp_dir, "files")
 
     try:
         transfer_status["log"] = "Bắt đầu quá trình...\n"
         transfer_status["status"] = "running"
         transfer_status["progress"] = 5
 
-        # Kiểm tra Zalo trên thiết bị đích (nếu là import) hoặc thiết bị nguồn (nếu là export)
-        transfer_status["log"] += f"Kiểm tra Zalo trên thiết bị {connected_device_id}...\n"
-        pid_check_cmd = ["adb", "-s", connected_device_id, "shell", "pidof", "com.zing.zalo"]
-        pid_check_result = subprocess.run(pid_check_cmd, capture_output=True, text=True, check=False)
-        if pid_check_result.stdout.strip():
-            transfer_status["log"] += "[CẢNH BÁO] Zalo đang chạy trên thiết bị. Nên tắt Zalo trước khi chuyển dữ liệu.\n"
-        else:
-            transfer_status["log"] += "Zalo không chạy trên thiết bị (Tốt).\n"
-        transfer_status["progress"] = 15
+        if environment == 'android':
+            # Logic cho môi trường Android (2 thiết bị)
+            device_a_id = connection_details.get("deviceA")
+            device_b_id = connection_details.get("deviceB")
 
-        if direction == 'export': # Lấy dữ liệu từ thiết bị remote (B) về máy chạy tool (A)
-            transfer_status["log"] += f"Đang xuất dữ liệu từ thiết bị {connected_device_id} về máy {"Windows" if is_windows else "Android (Termux)"}...\n"
+            if not all([device_a_id, device_b_id]):
+                raise Exception("Lỗi: Thiếu thông tin kết nối cho Thiết bị A hoặc Thiết bị B.")
+
+            transfer_status["log"] += f"Thiết bị A (máy chạy tool): {device_a_id}\n"
+            transfer_status["log"] += f"Thiết bị B (máy từ xa): {device_b_id}\n"
+
             # Xóa thư mục tạm thời nếu đã tồn tại để đảm bảo dữ liệu mới nhất
             if os.path.exists(local_zalo_data_path):
+                transfer_status["log"] += f"Xóa thư mục tạm thời cũ: {local_zalo_data_path}\n"
                 shutil.rmtree(local_zalo_data_path)
-            os.makedirs(local_temp_dir, exist_ok=True)
+            os.makedirs(local_zalo_data_path, exist_ok=True)
 
-            command = ["adb", "-s", connected_device_id, "pull", data_path_on_device, local_temp_dir]
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, shell=is_windows)
-            
-            for line in iter(process.stdout.readline, ""):
-                transfer_status["log"] += line
-                if "%" in line:
-                    try:
-                        progress_val = int(line.split("%")[0].strip().split()[-1])
-                        if transfer_status["progress"] < progress_val:
-                            transfer_status["progress"] = progress_val
-                    except ValueError:
-                        pass
-                if transfer_status["progress"] < 90:
-                    transfer_status["progress"] += 1 
+            if direction == 'export': # A -> B
+                transfer_status["log"] += f"\n--- BƯỚC 1: Lấy dữ liệu từ Thiết bị A ---\n"
+                # Pull từ chính nó (A) vào thư mục tạm của Termux
+                pull_cmd_A = ["adb", "-s", device_a_id, "pull", data_path_on_device, local_temp_dir]
+                _run_adb_process(pull_cmd_A, is_windows, "Đang lấy dữ liệu từ máy A...")
+                
+                transfer_status["log"] += f"\n--- BƯỚC 2: Chuyển dữ liệu đến Thiết bị B ---\n"
+                # Push từ thư mục tạm của Termux lên thiết bị B
+                push_cmd_B = ["adb", "-s", device_b_id, "push", local_zalo_data_path, os.path.dirname(data_path_on_device)]
+                _run_adb_process(push_cmd_B, is_windows, "Đang đẩy dữ liệu tới máy B...")
 
-        elif direction == 'import': # Đẩy dữ liệu từ máy chạy tool (A) lên thiết bị remote (B)
-            transfer_status["log"] += f"Đang nhập dữ liệu từ máy {"Windows" if is_windows else "Android (Termux)"} vào thiết bị {connected_device_id}...\n"
-            # Giả định dữ liệu Zalo đã được chuẩn bị sẵn trong local_zalo_data_path
-            # Nếu chưa có, cần một bước để người dùng chọn thư mục nguồn hoặc kéo từ thiết bị khác trước.
-            # Để minh họa, tôi sẽ tạo một thư mục giả định với một tệp tin.
-            if not os.path.exists(local_zalo_data_path):
-                os.makedirs(local_zalo_data_path, exist_ok=True)
-                with open(os.path.join(local_zalo_data_path, "test_import.txt"), "w") as f:
-                    f.write("Đây là dữ liệu Zalo giả định để nhập.")
+            elif direction == 'import': # B -> A
+                transfer_status["log"] += f"\n--- BƯỚC 1: Lấy dữ liệu từ Thiết bị B ---\n"
+                # Pull từ thiết bị B vào thư mục tạm của Termux
+                pull_cmd_B = ["adb", "-s", device_b_id, "pull", data_path_on_device, local_temp_dir]
+                _run_adb_process(pull_cmd_B, is_windows, "Đang lấy dữ liệu từ máy B...")
 
-            command = ["adb", "-s", connected_device_id, "push", local_zalo_data_path, os.path.dirname(data_path_on_device)]
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, shell=is_windows)
-            
-            for line in iter(process.stdout.readline, ""):
-                transfer_status["log"] += line
-                if "%" in line:
-                    try:
-                        progress_val = int(line.split("%")[0].strip().split()[-1])
-                        if transfer_status["progress"] < progress_val:
-                            transfer_status["progress"] = progress_val
-                    except ValueError:
-                        pass
-                if transfer_status["progress"] < 90:
-                    transfer_status["progress"] += 1 
+                transfer_status["log"] += f"\n--- BƯỚC 2: Chuyển dữ liệu đến Thiết bị A ---\n"
+                # Push từ thư mục tạm của Termux vào chính nó (A)
+                push_cmd_A = ["adb", "-s", device_a_id, "push", local_zalo_data_path, os.path.dirname(data_path_on_device)]
+                _run_adb_process(push_cmd_A, is_windows, "Đang đẩy dữ liệu tới máy A...")
 
-        process.wait()
-        
-        if process.returncode != 0:
-            raise Exception(f"Lệnh thực thi thất bại với exit code {process.returncode}. Output: {process.stdout.read() + process.stderr.read()}")
+        else: # Logic cũ cho Windows (1 thiết bị)
+            devices_result = run_adb_command("devices", is_windows=is_windows)
+            device_id = connection_details.get("deviceId") or connection_details.get("ip") + ":" + connection_details.get("connect_port", "5555")
+
+            if not device_id:
+                raise Exception("Không tìm thấy thiết bị nào được kết nối.")
+                
+            transfer_status["log"] += f"Đang làm việc với thiết bị: {device_id}\n"
+
+            if direction == 'export':
+                pull_cmd = ["adb", "-s", device_id, "pull", data_path_on_device, local_temp_dir]
+                _run_adb_process(pull_cmd, is_windows, "Đang xuất dữ liệu từ thiết bị...")
+            elif direction == 'import':
+                push_cmd = ["adb", "-s", device_id, "push", local_zalo_data_path, os.path.dirname(data_path_on_device)]
+                _run_adb_process(push_cmd, is_windows, "Đang nhập dữ liệu vào thiết bị...")
 
         transfer_status["progress"] = 100
         transfer_status["status"] = "completed"
@@ -139,3 +122,27 @@ def start_transfer_thread(direction, transfer_state_from_frontend):
     except Exception as e:
         transfer_status["status"] = "failed"
         transfer_status["log"] += f"\n--- LỖI: {str(e)} ---"
+
+def _run_adb_process(command, is_windows, initial_log):
+    """Hàm phụ để chạy một tiến trình ADB và cập nhật log/progress."""
+    global transfer_status
+    transfer_status["log"] += initial_log + "\n"
+    
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, shell=is_windows)
+    
+    for line in iter(process.stdout.readline, ""):
+        transfer_status["log"] += line
+        # Cập nhật progress bar một cách đơn giản
+        if transfer_status["progress"] < 95:
+            transfer_status["progress"] += 0.1 
+    
+    process.wait()
+    
+    if process.returncode != 0:
+        # Cố gắng đọc thêm output nếu có lỗi
+        error_output = process.stdout.read()
+        raise Exception(f"Lệnh '{" ".join(command)}' thất bại với exit code {process.returncode}. Output: {error_output}")
+    
+    transfer_status["log"] += "Hoàn tất bước.\n"
+    transfer_status["progress"] = int(transfer_status["progress"]) + 5 # Tăng progress sau mỗi bước
+
