@@ -397,8 +397,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     const statusResponse = await fetch(`${API_BASE_URL}/api/status`);
                     const statusResult = await statusResponse.json();
                     
-                    progressBar.style.width = statusResult.progress + '%';
-                    progressText.textContent = statusResult.progress + '%';
+                    const formattedProgress = statusResult.progress.toFixed(1);
+                    progressBar.style.width = formattedProgress + '%';
+                    progressText.textContent = formattedProgress + '%';
                     logOutput.textContent = statusResult.log;
                     logOutput.scrollTop = logOutput.scrollHeight;
 
@@ -418,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (error) {
                     console.error('Error fetching status:', error);
                 }
-            }, 2000);
+            }, 250);
 
         } catch (error) {
             logOutput.textContent += `✗ Lỗi kết nối tới backend: ${error.message}\n`;
