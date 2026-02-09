@@ -196,8 +196,8 @@ function getWirelessFormHTML(buttonOnclick, buttonText) {
                 <input type="text" id="pairing-code" placeholder="ví dụ: 123456" class="w-full bg-gray-700 border border-gray-600 rounded-lg shadow-sm py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all">
             </div>
             <div>
-                <label for="connect-port" class="block text-sm font-medium text-gray-300 mb-2">Connect Port (Tùy chọn)</label>
-                <input type="text" id="connect-port" placeholder="Để trống nếu không chắc (mặc định: 5555)" class="w-full bg-gray-700 border border-gray-600 rounded-lg shadow-sm py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all">
+                <label for="connect-port" class="block text-sm font-medium text-gray-300 mb-2">Connect Port</label>
+                <input type="text" id="connect-port" placeholder="ví dụ: 41217" class="w-full bg-gray-700 border border-gray-600 rounded-lg shadow-sm py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all">
             </div>
             <button onclick="${buttonOnclick}" class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-bold py-2 px-4 text-sm md:py-3 md:px-6 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 w-full">${buttonText}</button>
         </div>
@@ -249,10 +249,10 @@ async function performWirelessConnection(isDeviceA) {
     const ip = document.getElementById('device-ip').value;
     const pairing_port = document.getElementById('pairing-port').value;
     const pairing_code = document.getElementById('pairing-code').value;
-    const connect_port = document.getElementById('connect-port').value || '5555';
+    const connect_port = document.getElementById('connect-port').value;
 
-    if (!ip || !pairing_port || !pairing_code) {
-        showToast('Vui lòng điền đầy đủ thông tin IP, Pairing Port và Pairing Code!', 'warning', 3000);
+    if (!ip || !pairing_port || !pairing_code || !connect_port) {
+        showToast('Vui lòng điền đầy đủ tất cả các thông tin kết nối!', 'warning', 3000);
         return;
     }
 

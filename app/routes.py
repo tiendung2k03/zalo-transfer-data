@@ -47,9 +47,10 @@ def adb_connect():
     data = request.json
     environment = data.get("environment", "android")
     is_windows = (environment == "windows")
-    ip, port = data.get("ip"), data.get("connect_port", "5555")
-    if not ip:
-        return jsonify({"success": False, "error": "Thiếu địa chỉ IP."}), 400
+    ip = data.get("ip")
+    port = data.get("connect_port")
+    if not ip or not port:
+        return jsonify({"success": False, "error": "Thiếu địa chỉ IP hoặc Connect Port."}), 400
     result = run_adb_command(f"connect {ip}:{port}", is_windows=is_windows)
     return jsonify(result)
 
