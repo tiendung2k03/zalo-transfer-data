@@ -128,7 +128,7 @@ def start_transfer_thread(direction, transfer_state_from_frontend):
         transfer_status["progress"] = 55
         if environment == 'android' or (is_windows and direction == 'import'):
             # Dọn dẹp thư mục cũ trên thiết bị đích
-            pre_push_cleanup_cmd = f"adb -s {target_device} shell \"rm -rf {remote_data_path}\""
+            pre_push_cleanup_cmd = f'adb -s {target_device} shell "rm -rf {remote_data_path}"'
             _run_shell_command(pre_push_cleanup_cmd, f"Dọn dẹp đích trên {target_device}...", is_windows)
             transfer_status["progress"] = 60
             
