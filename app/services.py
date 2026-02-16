@@ -37,20 +37,26 @@ def run_adb_command(command, device_serial=None, is_windows=False):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def _run_shell_command(command, log_message, is_windows=False):
+def _run_shell_command(command, log_message, is_windows=False, output_file=None):
     """Hàm phụ để chạy một lệnh shell phức tạp, xử lý output và báo lỗi."""
     global transfer_status
     transfer_status["log"] += log_message + "\n"
     
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True, universal_newlines=True, bufsize=1)
-    
-    output_lines = []
-    for line in iter(process.stdout.readline, ''):
-        output_lines.append(line)
-        # Thêm output vào log chính để người dùng thấy có hoạt động
-        # Tránh các dòng quá dài (thường là lỗi binary)
-        if len(line) < 200:
-            transfer_status["log"] += line
+    if output_file:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, shell=True, universal_newlines=True)
+        output_lines = []
+        for line in iter(process.stderr.readline, ''):
+            output_lines.append(line)
+            if len(line) < 200:
+                transfer_status["log"] += f"[ERR] {line}"
+    else:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True, universal_newlines=True, bufsize=1)
+        
+        output_lines = []
+        for line in iter(process.stdout.readline, ''):
+            output_lines.append(line)
+            if len(line) < 200:
+                transfer_status["log"] += line
     
     return_code = process.wait()
 
@@ -60,136 +66,116 @@ def _run_shell_command(command, log_message, is_windows=False):
     
     transfer_status["log"] += "Hoàn tất bước.\n"
 
+
 def start_transfer_thread(direction, transfer_state_from_frontend):
     """
     Hàm chính thực hiện việc chuyển dữ liệu. Sử dụng 'tar' để vượt qua 
-    các hạn chế về quyền của Scoped Storage trên Android 11+.
+    các hạn chế về quyền của Scoped Storage trên Android 11+ và tối ưu tốc độ.
+    Chỉ hỗ trợ chuyển dữ liệu giữa hai thiết bị Android.
     """
     global transfer_status
     
+    # Khởi tạo giá trị mặc định cho các serial thiết bị
+    source_device_serial = None
+    target_device_serial = None
+    
     try:
         environment = transfer_state_from_frontend.get("environment")
-        is_windows = (environment == "windows")
+        is_windows = (environment == "windows") # Xác định host có phải Windows không
+
+        # Xác định thư mục tạm cục bộ dựa trên môi trường
+        if is_windows:
+            local_temp_dir = os.path.join(os.getcwd(), "zalo_transfer_temp")
+        else: # Android (Termux)
+            local_temp_dir = "/data/data/com.termux/files/home/zalo_transfer_temp"
+
+
         connection_details = transfer_state_from_frontend.get("connection", {})
         
-        remote_zalo_root = "/sdcard/Android/data/com.zing.zalo"
-        data_dir_name = "files"
-        remote_data_path = os.path.join(remote_zalo_root, data_dir_name)
+        # Định nghĩa các đường dẫn
+        zalo_package_name = "com.zing.zalo"
+        zalo_data_parent_dir = "/storage/emulated/0/Android/data" # Thư mục chứa com.zing.zalo
         
-        local_temp_dir = "/data/data/com.termux/files/home/zalo_data_temp"
-        local_data_path = os.path.join(local_temp_dir, data_dir_name) # Path to data in local temp folder
-
-        remote_temp_dir = "/sdcard/Download/zalo_temp" # Temporary directory on Android device
-        remote_temp_data_path = os.path.join(remote_temp_dir, data_dir_name) # Path to data in remote temp folder
-
-        transfer_status["log"] = "Bắt đầu quá trình (phương pháp RUN-AS + ADB PULL/PUSH)...\n"
-        transfer_status["status"] = "running"
-        transfer_status["progress"] = 5
-
-        # Dọn dẹp thư mục tạm cục bộ cũ
+        # Tạo thư mục tạm cục bộ
         if os.path.exists(local_temp_dir):
             shutil.rmtree(local_temp_dir)
         os.makedirs(local_temp_dir)
-        transfer_status["progress"] = 10
+        local_tar_path = os.path.join(local_temp_dir, "zalo.tar") # File tar cục bộ
 
-        # Xác định thiết bị nguồn và đích
-        if environment == 'android':
-            device_a_id = connection_details.get("deviceA")
-            device_b_id = connection_details.get("deviceB")
-            if not all([device_a_id, device_b_id]):
-                raise Exception("Lỗi: Thiếu thông tin kết nối cho Thiết bị A hoặc B.")
-            
-            source_device, target_device = (device_a_id, device_b_id) if direction == 'export' else (device_b_id, device_a_id)
-            transfer_status["log"] += f"Nguồn: {source_device} | Đích: {target_device}\n"
+        # Đường dẫn file tar trên /sdcard của thiết bị Android (nơi công khai)
+        remote_tar_path = "/sdcard/zalo.tar" 
 
-        else: # Windows/PC
-            device_id = connection_details.get("deviceId") or f"{connection_details.get('ip')}:{connection_details.get('connect_port', '5555')}"
-            if not device_id:
-                raise Exception("Không tìm thấy thiết bị nào được kết nối.")
-            source_device = target_device = device_id
-            transfer_status["log"] += f"Đang làm việc với thiết bị: {device_id}\n"
+        transfer_status["log"] = "Bắt đầu quá trình chuyển giao (phương pháp TAR)....\n"
+        transfer_status["status"] = "running"
+        transfer_status["progress"] = 5
 
-        # --- BƯỚC 1: LẤY DỮ LIỆU TỪ NGUỒN ---
-        transfer_status["log"] += "\n--- BƯỚC 1: Lấy dữ liệu từ nguồn ---\n"
-        transfer_status["progress"] = 15
-        if environment == 'android' or (is_windows and direction == 'export'):
-            # 1.a. Dọn dẹp thư mục tạm trên thiết bị nguồn
-            pre_copy_cleanup_cmd = f'adb -s {source_device} shell "rm -rf {remote_temp_dir}"'
-            _run_shell_command(pre_copy_cleanup_cmd, f"Dọn dẹp thư mục tạm trên nguồn {source_device}...", is_windows)
-            transfer_status["progress"] = 20
-
-            # 1.b. Sao chép dữ liệu từ Zalo app data sang thư mục tạm công khai trên thiết bị nguồn bằng run-as
-            transfer_status["log"] += f"Sao chép dữ liệu trên {source_device} vào thư mục tạm bằng run-as...\n"
-            # create remote_temp_dir first
-            create_temp_dir_cmd = f"adb -s {source_device} shell \"mkdir -p {remote_temp_dir}\""
-            _run_shell_command(create_temp_dir_cmd, f"Tạo thư mục tạm {remote_temp_dir} trên {source_device}...", is_windows)
-            
-            run_as_copy_cmd = f"run-as com.zing.zalo cp -r {remote_data_path} {remote_temp_dir}/"
-            copy_on_device_cmd = f"adb -s {source_device} shell \"{run_as_copy_cmd}\""
-            _run_shell_command(copy_on_device_cmd, f"Sao chép dữ liệu trên {source_device} bằng run-as...", is_windows)
-            transfer_status["progress"] = 30
-
-            # 1.c. Kéo dữ liệu từ thư mục tạm trên thiết bị nguồn về máy tính cục bộ
-            transfer_status["log"] += f"Kéo dữ liệu từ thư mục tạm trên {source_device} về máy tính...\n"
-            pull_cmd = f"adb -s {source_device} pull {remote_temp_data_path} {local_data_path}"
-            _run_shell_command(pull_cmd, f"Kéo dữ liệu từ {source_device}...", is_windows)
-            transfer_status["progress"] = 40
-
-            # 1.d. Dọn dẹp thư mục tạm trên thiết bị nguồn
-            post_copy_cleanup_cmd = f'adb -s {source_device} shell "rm -rf {remote_temp_dir}"'
-            _run_shell_command(post_copy_cleanup_cmd, f"Dọn dẹp thư mục tạm trên nguồn {source_device}...", is_windows)
-            
-        elif is_windows and direction == 'import':
-            # Dữ liệu cục bộ trên PC đã có sẵn trong local_data_path
-            if not os.path.isdir(local_data_path):
-                 raise Exception(f"Thư mục nguồn '{local_data_path}' không tồn tại. Hãy đặt thư mục 'files' của Zalo vào trong '{local_temp_dir}' trước khi nhập.")
-            transfer_status["log"] += "Dữ liệu nguồn cục bộ đã sẵn sàng.\n"
+        # Logic chỉ còn cho chuyển giữa hai điện thoại (Android -> Android, hoặc Android qua Windows host)
+        device_a_id = connection_details.get("deviceA")
+        device_b_id = connection_details.get("deviceB")
+        if not all([device_a_id, device_b_id]):
+            raise Exception("Lỗi: Thiếu thông tin kết nối cho Thiết bị A hoặc B.")
         
-        transfer_status["progress"] = 50
+        # direction 'export' là từ A đến B (A là nguồn, B là đích)
+        # direction 'import' là từ B đến A (B là nguồn, A là đích)
+        source_device_serial = device_a_id if direction == 'export' else device_b_id
+        target_device_serial = device_b_id if direction == 'export' else device_a_id
+        
+        transfer_status["log"] += f"Nguồn: {source_device_serial} | Đích: {target_device_serial}\n"
 
-        # --- BƯỚC 2: CHUYỂN DỮ LIỆU TỚI ĐÍCH ---
-        transfer_status["log"] += f"\n--- BƯỚC 2: Đẩy dữ liệu tới đích ---\n"
-        transfer_status["progress"] = 55
-        if environment == 'android' or (is_windows and direction == 'import'):
-            # 2.a. Dọn dẹp thư mục Zalo cũ và thư mục tạm trên thiết bị đích
-            pre_push_cleanup_cmd = f'adb -s {target_device} shell "rm -rf {remote_data_path}"'
-            _run_shell_command(pre_push_cleanup_cmd, f"Dọn dẹp đích trên {target_device}...", is_windows)
-            
-            pre_push_temp_cleanup_cmd = f'adb -s {target_device} shell "rm -rf {remote_temp_dir}"'
-            _run_shell_command(pre_push_temp_cleanup_cmd, f"Dọn dẹp thư mục tạm trên đích {target_device}...", is_windows)
-            transfer_status["progress"] = 60
+        # --- BƯỚC 1: TẠO VÀ TẢI FILE DỮ LIỆU TỪ THIẾT BỊ NGUỒN (SOURCE_DEVICE_SERIAL) ---
+        transfer_status["log"] += f"\n--- BƯỚC 1: Nén và tải dữ liệu từ {source_device_serial} ---\n"
+        transfer_status["progress"] = 15
 
-            # 2.b. Đẩy dữ liệu từ máy tính cục bộ vào thư mục tạm công khai trên thiết bị đích
-            transfer_status["log"] += f"Đẩy dữ liệu tới thư mục tạm trên {target_device}...\n"
-            push_to_temp_cmd = f"adb -s {target_device} push {local_data_path} {remote_temp_dir}/"
-            _run_shell_command(push_to_temp_cmd, f"Đẩy dữ liệu tới thư mục tạm trên {target_device}...", is_windows)
-            transfer_status["progress"] = 70
+        # Lệnh tar trên thiết bị nguồn, loại bỏ run-as
+        tar_cmd = f'adb -s {source_device_serial} exec-out "cd {zalo_data_parent_dir} && tar -cf - {zalo_package_name}" > "{local_tar_path}"'
+        _run_shell_command(tar_cmd, f"Đang nén dữ liệu từ {source_device_serial} và lưu vào {local_tar_path}...", is_windows, output_file=local_tar_path)
+        
+        if not os.path.exists(local_tar_path) or os.path.getsize(local_tar_path) == 0:
+            raise Exception("Không thể tạo file sao lưu hoặc file rỗng. Dữ liệu Zalo có thể không tồn tại hoặc không thể truy cập.")
+        
+        transfer_status["log"] += f"Đã tạo file sao lưu tạm thời tại: {local_tar_path} ({os.path.getsize(local_tar_path)} bytes)\n"
+        transfer_status["progress"] = 40
 
-            # 2.c. Sao chép dữ liệu từ thư mục tạm công khai vào Zalo app data trên thiết bị đích bằng run-as
-            transfer_status["log"] += f"Sao chép dữ liệu vào Zalo trên {target_device} bằng run-as...\n"
-            run_as_paste_cmd = f"run-as com.zing.zalo cp -r {remote_temp_data_path} {remote_zalo_root}/"
-            paste_on_device_cmd = f"adb -s {target_device} shell \"{run_as_paste_cmd}\""
-            _run_shell_command(paste_on_device_cmd, f"Sao chép dữ liệu vào Zalo trên {target_device} bằng run-as...", is_windows)
-            transfer_status["progress"] = 80
+        # --- BƯỚC 2: CHUYỂN FILE DỮ LIỆU TỚI THIẾT BỊ ĐÍCH (TARGET_DEVICE_SERIAL) ---
+        transfer_status["log"] += f"\n--- BƯỚC 2: Tải file sao lưu lên {target_device_serial} ---\n"
+        transfer_status["progress"] = 45
 
-            # 2.d. Dọn dẹp thư mục tạm trên thiết bị đích
-            post_paste_cleanup_cmd = f'adb -s {target_device} shell "rm -rf {remote_temp_dir}"'
-            _run_shell_command(post_paste_cleanup_cmd, f"Dọn dẹp thư mục tạm trên đích {target_device}...", is_windows)
-            
-        elif is_windows and direction == 'export':
-            # Dữ liệu đã được pull về local_data_path. Không cần làm gì thêm ở đây.
-            transfer_status["log"] += "Dữ liệu đã được kéo về máy cục bộ.\n"
+        _run_shell_command(f'adb -s {target_device_serial} shell "rm -f {remote_tar_path}"', f"Dọn dẹp file cũ trên {target_device_serial}...", is_windows)
+
+        push_cmd = f'adb -s {target_device_serial} push "{local_tar_path}" "{remote_tar_path}"'
+        _run_shell_command(push_cmd, f"Đang đẩy {os.path.basename(local_tar_path)} tới {target_device_serial}...", is_windows)
+        transfer_status["progress"] = 70
+
+        # --- BƯỚC 3: GIẢI NÉN FILE DỮ LIỆU TRÊN THIẾT BỊ ĐÍCH (TARGET_DEVICE_SERIAL) ---
+        transfer_status["log"] += f"\n--- BƯỚC 3: Giải nén dữ liệu trên {target_device_serial} ---\n"
+        transfer_status["progress"] = 75
+
+        # Xóa thư mục Zalo cũ trên thiết bị đích, loại bỏ run-as
+        cleanup_old_data_cmd = f'adb -s {target_device_serial} shell "rm -rf {zalo_data_parent_dir}/{zalo_package_name}"'
+        _run_shell_command(cleanup_old_data_cmd, f"Đang xóa dữ liệu Zalo cũ trên {target_device_serial}...", is_windows)
+
+        # Giải nén file tar trên thiết bị đích, loại bỏ run-as
+        untar_cmd = f'adb -s {target_device_serial} shell "cd {zalo_data_parent_dir} && tar -xf {remote_tar_path}"'
+        _run_shell_command(untar_cmd, f"Đang giải nén dữ liệu trên {target_device_serial}...", is_windows)
+        transfer_status["progress"] = 90
 
         transfer_status["progress"] = 100
         transfer_status["status"] = "completed"
-        transfer_status["log"] += "\n--- QUÁ TRÌNH HOÀN TẤT THÀNH CÔNG! ---\n"
+        transfer_status["log"] += "\n--- QUÁ TRÌNH CHUYỂN DỮ LIỆU HOÀN TẤT THÀNH CÔNG! ---\n"
+
 
     except Exception as e:
         transfer_status["status"] = "failed"
-        transfer_status["log"] += f"\n--- LỖI: {str(e)} ---"
+        transfer_status["log"] += f"\n--- LỖI: {str(e)} ---\n"
     finally:
-        # Không cần dọn dẹp file tar nữa, chỉ cần dọn dẹp thư mục cục bộ
+        # Dọn dẹp thư mục tạm cục bộ
         if os.path.exists(local_temp_dir):
             shutil.rmtree(local_temp_dir)
-
-
+            transfer_status["log"] += f"Đã dọn dẹp thư mục tạm cục bộ: {local_temp_dir}\n"
+        
+        # Luôn dọn dẹp file tar trên thiết bị đích nếu nó đã được đẩy lên
+        if target_device_serial: # Chỉ dọn dẹp nếu có thiết bị đích được xác định
+            try:
+                _run_shell_command(f'adb -s {target_device_serial} shell "rm -f {remote_tar_path}"', f"Dọn dẹp file tar trên đích {target_device_serial}...", is_windows)
+            except Exception as cleanup_e:
+                transfer_status["log"] += f"Lỗi khi dọn dẹp file tar trên thiết bị đích {target_device_serial}: {cleanup_e}\n"
